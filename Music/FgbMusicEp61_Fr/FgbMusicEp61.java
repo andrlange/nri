@@ -4,6 +4,8 @@ import javazoom.jl.player.Player;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.FileInputStream;
 
 public class FgbMusicEp61 extends JFrame {
@@ -17,6 +19,18 @@ public class FgbMusicEp61 extends JFrame {
         // DISPOSE_ON_CLOSE: closing this player must not terminate the
         // whole launcher (EXIT_ON_CLOSE would kill the entire JVM).
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+
+        // Closing the window must stop playback too. DISPOSE_ON_CLOSE only
+        // disposes the frame; the MP3 plays on a separate background thread,
+        // so without this the sound keeps running after the window is gone.
+        // Intercept the close event and stop the sound, just like Stop.
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                stopMp3();
+            }
+        });
+
         setLayout(new FlowLayout());
 
         JButton playButton = new JButton("Play");

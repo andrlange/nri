@@ -157,13 +157,14 @@ icons blank and make the **Play** button log a `FileNotFoundException` (the app 
 
 ## Fixes applied
 
-Three bugs in the original upload were fixed while getting it to run cleanly:
+Four bugs in the original upload were fixed while getting it to run cleanly:
 
 | # | Problem | Fix | Where |
 |---|---------|-----|-------|
 | 1 | **"Fgb Music Ep 61" button never opened the player.** It wrapped the player in another window (`musicFrame.add(music)`); since `FgbMusicEp61` is itself a `JFrame`, adding it into another `JFrame` throws `IllegalArgumentException: adding a window to a container`. The click only dumped a stack trace. | Show the `FgbMusicEp61` frame directly (`music.setLocationRelativeTo(null); music.setVisible(true);`). | `FaceGameBat_3DJ_1_5.java:468` |
 | 2 | **Closing the music window killed the whole app.** The player used `setDefaultCloseOperation(EXIT_ON_CLOSE)`, terminating the entire JVM — so closing the player also closed the launcher. | Changed to `DISPOSE_ON_CLOSE`. | `Music/FgbMusicEp61_Fr/FgbMusicEp61.java:19` |
 | 3 | **MP3 was never found.** Playback loaded the bare filename `"FgbMusicEp61.mp3"`, but the file lives in `Music/FgbMusicEp61_Fr/`, so **Play** threw `FileNotFoundException`. | Corrected the path to `"Music/FgbMusicEp61_Fr/FgbMusicEp61.mp3"` (resolved from the repository root). | `Music/FgbMusicEp61_Fr/FgbMusicEp61.java:28` |
+| 4 | **Closing the music window left the sound playing.** With **Play** running, closing the player window (and reopening it) left the MP3 looping with no way to stop it — **Stop** only acts on the new window's player. `DISPOSE_ON_CLOSE` (Fix #2) disposes the frame but never stops the background playback thread; only the old `EXIT_ON_CLOSE` had incidentally silenced it by killing the JVM. | Intercept the window-closing event with a `WindowAdapter` and call `stopMp3()`, so closing the window stops the sound exactly like pressing **Stop**. | `Music/FgbMusicEp61_Fr/FgbMusicEp61.java` (constructor) |
 
 ---
 
@@ -173,3 +174,55 @@ Three bugs in the original upload were fixed while getting it to run cleanly:
 - A graphical environment (the app opens real windows).
 - Audio output device for MP3 playback (via `javax.sound`).
 - No external/network dependencies; JLayer is vendored in-tree.
+
+---
+
+## Fix — stop the sound when the music window is closed
+
+**Symptom:** Press **Play** → sound plays. Press **Stop** → it stops (good). But press **Play**
+and then **close the player window** (the dialog with the Play/Stop buttons) → the sound keeps
+playing. Reopening the window and pressing **Stop** does **not** stop it either, because the new
+window's **Stop** only closes the *new* `Player` instance — the original playback thread from the
+closed window is still running and is no longer reachable.
+
+**Cause:** `setDefaultCloseOperation(DISPOSE_ON_CLOSE)` only disposes the frame; it never stops the
+background decode/playback thread (`player.close()` + `playThread.interrupt()`). The previous
+`EXIT_ON_CLOSE` only "worked" by killing the whole JVM.
+
+**Fix — intercept the window close and stop playback, just like the Stop button.** Add a
+`WindowAdapter` whose `windowClosing(...)` calls the existing `stopMp3()` in the `FgbMusicEp61`
+constructor (right after `setDefaultCloseOperation(...)`):
+
+```java
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+
+// ... inside the FgbMusicEp61() constructor, after setDefaultCloseOperation(DISPOSE_ON_CLOSE):
+
+// Closing the window must stop playback too. DISPOSE_ON_CLOSE only
+// disposes the frame; the MP3 plays on a separate background thread,
+// so without this the sound keeps running after the window is gone.
+// Intercept the close event and stop the sound, just like Stop.
+addWindowListener(new WindowAdapter() {
+    @Override
+    public void windowClosing(WindowEvent e) {
+        stopMp3();
+    }
+});
+```
+
+`stopMp3()` is the same method the **Stop** button already calls:
+
+```java
+private void stopMp3() {
+    if (player != null) {
+        player.close();
+    }
+    if (playThread != null) {
+        playThread.interrupt();
+    }
+}
+```
+
+With this in place, closing the player window stops the audio immediately — identical to pressing
+**Stop** — so no orphaned, unreachable playback thread is ever left running.
