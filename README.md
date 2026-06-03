@@ -73,9 +73,15 @@ nri/
                                 │ "Fgb Music Ep 61" button click
                                 ▼
 ┌────────────────────────────────────────────────────────────────┐
-│  Music.FgbMusicEp61_Fr.FgbMusicEp61  (JFrame)                  │
-│  • Play  → new Thread → JLayer Player.play() on FileInputStream│
-│  • Stop  → player.close() + thread.interrupt()                 │
+│  Music.FgbMusicEp61_Fr.FgbMusicEp61  (JFrame — UI only)        │
+│  • Draggable timeline (JSlider) + elapsed / total time labels  │
+│  • Java2D-drawn icon buttons:  ▶ Play  ❚❚ Pause  ■ Stop        │
+│  • swing.Timer advances the timeline from the engine playhead  │
+│            │ delegates audio to                                │
+│            ▼                                                   │
+│  Music.FgbMusicEp61_Fr.Mp3Player  (engine — Swing-agnostic)    │
+│  • Decodes one frame at a time over JLayer AdvancedPlayer      │
+│  • play / pause / resume / stop / seek(frame); tracks playhead │
 └───────────────────────────────┬────────────────────────────────┘
                                 │ uses
                                 ▼
@@ -96,9 +102,12 @@ nri/
 - **Custom window chrome:** `f1.setUndecorated(true)` removes the native title bar; a `JPanel`
   with `MouseListener`/`MouseMotionListener` re-implements window dragging, and custom buttons
   re-implement minimize (`setExtendedState(ICONIFIED)`) and close (`dispose()`).
-- **Audio pipeline:** `FgbMusicEp61` wraps a `FileInputStream` in a JLayer `Player` and calls
-  `play()` on a dedicated `Thread` so the Swing Event Dispatch Thread is never blocked; `Stop`
-  closes the player and interrupts the thread.
+- **Audio pipeline:** `FgbMusicEp61` is now UI-only; all audio lives in the Swing-agnostic
+  `Mp3Player` engine, which decodes **one MPEG frame at a time** over JLayer's `AdvancedPlayer` on
+  a dedicated daemon `Thread` (so the Swing Event Dispatch Thread is never blocked). Tracking a
+  `currentFrame` playhead is what enables **pause** (stop feeding frames, keep the stream open) and
+  **seek** (reopen the file and skip to the target frame). See *Feature — pause + icon buttons +
+  seek timeline* below.
 - **Vendored dependency:** JLayer is checked into `javazoom/jl/` as both source and prebuilt
   `.class` files / `.ser` resources — there is **no build tool** (no Maven/Gradle); compilation
   is manual `javac`.
@@ -226,3 +235,110 @@ private void stopMp3() {
 
 With this in place, closing the player window stops the audio immediately — identical to pressing
 **Stop** — so no orphaned, unreachable playback thread is ever left running.
+
+> **Note:** after the playback engine was extracted (see the next section), the close handler is
+> named `shutdown()` and calls `engine.stop()` (which also stops the UI timer). The behaviour is
+> the same — closing the window stops the sound — only the method it delegates to changed.
+
+---
+
+## Feature — pause + icon buttons + seek timeline
+
+Adds a **Pause** control between Play and Stop, turns the three text buttons into
+**Graphics2D-drawn icons** (▶ ❚❚ ■), and puts a **draggable timeline** above them so you can
+**forward/rewind** by dragging, with `elapsed / total` time labels.
+
+```
+0:12 ───────●──────────── 3:45     ← JSlider (drag to seek) + time labels
+        [ ▶ ]  [ ❚❚ ]  [ ■ ]       ← Play / Pause / Stop, drawn with Graphics2D
+```
+
+**Why it needed an engine, not just buttons.** JLayer's plain `Player` plays a stream
+start-to-finish — it has **no pause and no random-access seek**. So the audio logic was extracted
+into a small, Swing-agnostic **`Mp3Player`** engine (`Music/FgbMusicEp61_Fr/Mp3Player.java`) that
+decodes the file **one MPEG frame at a time** and keeps a `currentFrame` playhead:
+
+- **Pause** stops feeding frames to the audio device while keeping the same stream open — so resume
+  is instant and gap-free.
+- **Seek** reopens the file and skips frames up to the target frame. MP3 frames have a constant
+  duration, so frame number maps directly to a time position. Reopening is the only operation that
+  causes a tiny (sub-second) gap — this is inherent to JLayer.
+
+The frame-by-frame loop is the heart of the engine:
+
+```java
+// Mp3Player.run() — one frame per iteration, honouring pause / seek / stop.
+openAt(currentFrame);                    // open the file, skip to the playhead
+while (!stopRequested) {
+    int target = seekTarget;             // a drag on the slider sets this
+    if (target >= 0) {                   // pending seek → reopen at the new frame
+        seekTarget = -1;
+        currentFrame = target;
+        openAt(currentFrame);
+    }
+    if (paused) { Thread.sleep(40); continue; }   // idle, stream stays open
+    if (!player.decodeOne()) break;      // false = end of track
+    currentFrame++;                      // advance the playhead
+}
+```
+
+`decodeOne()` / `skipOne()` are exposed by subclassing `AdvancedPlayer`, whose per-frame
+`decodeFrame()` / `skipFrame()` are `protected`:
+
+```java
+private static final class FramePlayer extends AdvancedPlayer {
+    FramePlayer(InputStream in) throws Exception { super(in); }
+    boolean decodeOne() throws Exception { return decodeFrame(); } // play one frame
+    boolean skipOne()   throws Exception { return skipFrame();   } // fast-forward one frame
+}
+```
+
+The track length comes from a one-time pre-scan (`analyze()`), which counts frames and reads the
+per-frame duration so the timeline knows the total time:
+
+```java
+Header h;
+while ((h = bitstream.readFrame()) != null) {
+    if (frames == 0) msPerFrame = h.ms_per_frame(); // constant for CBR
+    frames++;
+    bitstream.closeFrame();
+}
+totalFrames = frames; // e.g. 2568 frames × 26.122 ms ≈ 1:07 for the bundled track
+```
+
+**UI side (`FgbMusicEp61.java`).** The window is now UI-only. Buttons carry a small `Icon` that
+paints each glyph with `Graphics2D` — no image assets:
+
+```java
+case PLAY:  // right-pointing triangle ▶
+    g2.fillPolygon(new int[]{x, x, x + size},
+                   new int[]{y, y + size, y + size / 2}, 3);
+    break;
+case PAUSE: // two vertical bars ❚❚
+    int barWidth = size / 3;
+    g2.fillRect(x, y, barWidth, size);
+    g2.fillRect(x + size - barWidth, y, barWidth, size);
+    break;
+case STOP:  // filled square ■
+    g2.fillRect(x, y, size, size);
+    break;
+```
+
+A `javax.swing.Timer` (~200 ms) advances the slider from the engine's playhead, and a slider drag
+seeks — the live value is previewed while dragging and the actual `engine.seek(...)` is committed
+on release, so the timer never fights the user's drag:
+
+```java
+timeline.addChangeListener(e -> {
+    if (timeline.getValueIsAdjusting()) {            // still dragging
+        userSeeking = true;
+        elapsedLabel.setText(formatTime(sliderToMillis(timeline.getValue())));
+    } else if (userSeeking) {                        // released → commit the seek
+        userSeeking = false;
+        engine.seek(sliderToFrame(timeline.getValue()));
+    }
+});
+```
+
+**Buttons:** **Play** starts from the current position (or resumes if paused), **Pause** holds the
+position, **Stop** halts and rewinds to `0:00`. Closing the window still stops everything.
