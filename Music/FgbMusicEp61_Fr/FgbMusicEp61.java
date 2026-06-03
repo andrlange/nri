@@ -14,7 +14,9 @@ public class FgbMusicEp61 extends JFrame {
     public FgbMusicEp61() {
         setTitle("MP3 Player");
         setSize(300, 100);
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        // DISPOSE_ON_CLOSE: closing this player must not terminate the
+        // whole launcher (EXIT_ON_CLOSE would kill the entire JVM).
+        setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setLayout(new FlowLayout());
 
         JButton playButton = new JButton("Play");
@@ -23,7 +25,7 @@ public class FgbMusicEp61 extends JFrame {
         add(playButton);
         add(stopButton);
 
-        playButton.addActionListener(e -> playMp3("FgbMusicEp61.mp3"));
+        playButton.addActionListener(e -> playMp3("Music/FgbMusicEp61_Fr/FgbMusicEp61.mp3"));
         stopButton.addActionListener(e -> stopMp3());
     }
 

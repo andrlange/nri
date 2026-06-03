@@ -462,14 +462,12 @@ public class FaceGameBat_3DJ_1_5 extends JFrame {
 				
 				if(e.getSource()==fgbmusicep61) {
 					
+					// FgbMusicEp61 is itself a JFrame, so show it directly.
+					// (Adding a JFrame into another JFrame throws
+					//  IllegalArgumentException: "adding a window to a container".)
 					FgbMusicEp61 music = new FgbMusicEp61();
-					
-					JFrame musicFrame = new JFrame("Fgb Music Ep 61");
-                    musicFrame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-                    musicFrame.add(music);
-                    musicFrame.pack();
-                    musicFrame.setLocationRelativeTo(null);
-                    musicFrame.setVisible(true);
+					music.setLocationRelativeTo(null);
+					music.setVisible(true);
 					
 				}
 				
